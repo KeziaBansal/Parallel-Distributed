@@ -1,0 +1,60 @@
+// 1.	Estimate the value of Pi using the Monte Carlo method and demonstrate basic MPI functions
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <mpi.h>
+
+#define TOTAL_POINTS 1000000  // Total points for Monte Carlo simulation
+
+// Function to calculate points inside the circle
+int count_points_in_circle(int num_points) {
+    int count = 0;
+    for (int i = 0; i < num_points; i++) {
+        double x = (double)rand() / RAND_MAX;  // Random x-coordinate (0 to 1)
+        double y = (double)rand() / RAND_MAX;  // Random y-coordinate (0 to 1)
+        if (x * x + y * y <= 1.0) {
+            count++;
+        }
+    }
+    return count;
+}
+
+int main(int argc, char** argv) {
+    int rank, size;
+    int local_points, local_count;
+    int total_count;
+
+    MPI_Init(&argc, &argv);                 // Initialize MPI
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);   // Get process rank (ID)
+    MPI_Comm_size(MPI_COMM_WORLD, &size);   // Get total number of processes
+
+    // Divide points equally among processes
+    local_points = TOTAL_POINTS / size;
+
+    // Seed random number generator differently for each process
+    srand(rank + time(NULL));
+
+    // Each process calculates its own points in the circle
+    local_count = count_points_in_circle(local_points);
+
+    // Process 0 gathers results from all other processes
+    if (rank == 0) {
+        total_count = local_count; // Add its own count
+        for (int i = 1; i < size; i++) {
+            int received_count;
+            MPI_Recv(&received_count, 1, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            total_count += received_count;
+        }
+
+        // Calculate Pi
+        double pi_estimate = 4.0 * total_count / TOTAL_POINTS;
+        printf("Estimated value of Pi: %f\n", pi_estimate);
+
+    } else {
+        // Send local count to process 0
+        MPI_Send(&local_count, 1, MPI_INT, 0, 0, MPI_COMM_WORLD);
+    }
+
+    MPI_Finalize(); // Finalize MPI
+    return 0;
+}
