@@ -2,63 +2,79 @@
 #include <cuda_runtime.h>
 
 #define N 1024  // Vector size
-#define THREADS_PER_BLOCK 256
 
-// global arrays
-__device__ __managed__ int A[N];
-__device__ __managed__ int B[N];
-__device__ __managed__ int C[N];
-
-// Kernel for vector addition
-__global__ void vectorAdd() {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
+// CUDA kernel for vector addition
+__global__ void vectorAdd(int *A, int *B, int *C) {
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
     if (i < N) {
         C[i] = A[i] + B[i];
     }
 }
 
 int main() {
+    int A[N], B[N], C[N];
+    int *d_A, *d_B, *d_C;
+
+    // Fill host arrays
+    for (int i = 0; i < N; i++) {
+        A[i] = i;
+        B[i] = i * 2;
+    }
+
+    // Allocate device memory
+    cudaMalloc((void **)&d_A, N * sizeof(int));
+    cudaMalloc((void **)&d_B, N * sizeof(int));
+    cudaMalloc((void **)&d_C, N * sizeof(int));
+
+    // Copy input data to device
+    cudaMemcpy(d_A, A, N * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, B, N * sizeof(int), cudaMemcpyHostToDevice);
+
+    // Timing events
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
-    // Fill input vectors
-    for (int i = 0; i < N; i++) {
-        A[i] = i;
-        B[i] = 2 * i;
-    }
-
-    // Launch kernel and time it
-    int blocks = (N + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    // Record start time
     cudaEventRecord(start, 0);
-    vectorAdd<<<blocks, THREADS_PER_BLOCK>>>();
+
+    // Launch kernel
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
+    vectorAdd<<<blocksPerGrid, threadsPerBlock>>>(d_A, d_B, d_C);
+
+    // Record end time
     cudaEventRecord(stop, 0);
-
-    // Wait and compute elapsed time
     cudaEventSynchronize(stop);
-    float elapsed_ms;
-    cudaEventElapsedTime(&elapsed_ms, start, stop);
 
-    // Display some results
+    // Calculate elapsed time
+    float elapsedTime;
+    cudaEventElapsedTime(&elapsedTime, start, stop); // in ms
+
+    // Copy result back to host
+    cudaMemcpy(C, d_C, N * sizeof(int), cudaMemcpyDeviceToHost);
+
+    // Print a sample result
     printf("Sample result: C[10] = %d\n", C[10]);
 
-    // Query device properties
+    // Device property query
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);
+    float memClock = (float)prop.memoryClockRate;  
+    int busWidth = prop.memoryBusWidth;            // in bits
 
-    float memClockMHz = (float)prop.memoryClockRate;  // kHz
-    int memBusWidthBits = prop.memoryBusWidth;        // bits
-
-    // Theoretical BW = 2 * memClock * memBusWidth
-    float theoreticalBW = 2.0 * memClockMHz * memBusWidthBits / 8.0 / 1e6; // GB/s
-    printf("Theoretical Bandwidth = %.2f GB/s\n", theoreticalBW);
+    float theoreticalBW = 2.0 * memClock * busWidth / 8 / 1e6; // in GB/s
+    printf("Theoretical Bandwidth: %.2f GB/s\n", theoreticalBW);
 
     // Measured bandwidth
-    float elapsed_sec = elapsed_ms / 1000.0f;
-    int totalBytes = 3 * N * sizeof(int);  // A, B read + C write
-    float measuredBW = (float)totalBytes / elapsed_sec / (1 << 30); // GB/s
-    printf("Measured Bandwidth = %.6f GB/s\n", measuredBW);
-  
+    int totalBytes = 3 * N * sizeof(int); // A and B read, C written
+    float measuredBW = totalBytes / (elapsedTime / 1000.0f) / (1 << 30);
+    printf("Measured Bandwidth: %.6f GB/s\n", measuredBW);
+
+    // Free memory
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_C);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
 
